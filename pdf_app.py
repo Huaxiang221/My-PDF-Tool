@@ -7,62 +7,64 @@ from deskew import determine_skew
 from PIL import Image
 import io
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Color PDF Cleaner", layout="centered")
+st.set_page_config(page_title="PDF Cleaner Pro", layout="centered")
 
-# --- Core Processing Functions ---
+# --- Core Logic Functions ---
+
+def remove_handwriting_logic(image_cv, threshold_val):
+    """
+    Attempts to remove handwriting.
+    Principle: Printed text is usually pure black (value ~0), while handwriting
+    is often gray or colored (value ~50-150).
+    We use a threshold to turn everything not "black enough" into white.
+    """
+    # 1. Convert to Grayscale
+    gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+    
+    # 2. Gaussian Blur to smooth out pen strokes texture
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # 3. Thresholding
+    # Any pixel BRIGHTER than threshold_val becomes WHITE (255).
+    # Any pixel DARKER than threshold_val becomes BLACK (0).
+    # Lower threshold = Aggressive removal (only keeps pitch black text).
+    _, binary = cv2.threshold(blurred, threshold_val, 255, cv2.THRESH_BINARY)
+    
+    return binary
 
 def enhance_image_color(image_cv):
     """
-    Retains color (e.g., red/blue pen) while removing light background noise.
+    Color Enhance Mode: Keeps red/blue marks but whitens the background.
     """
-    # 1. Slight Gaussian Blur to smooth out paper noise
     blurred = cv2.GaussianBlur(image_cv, (3, 3), 0)
-    
-    # 2. Color Cleaning (White Balancing / Thresholding)
-    # Convert to HSV to check the 'Value' (Brightness) channel
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
     
-    # Create a mask: pixels brighter than 200 are considered "background"
-    # This detects light gray paper, shadows, and faint bleed-through text
+    # Detect light background (>200 brightness)
     mask = v > 200 
     
-    # 3. Boost Contrast and Saturation
-    # alpha > 1.0 (Increase contrast), beta < 0 (Darken the darks)
-    # This makes the ink look deeper and the background cleaner
+    # Increase contrast
     enhanced = cv2.convertScaleAbs(blurred, alpha=1.4, beta=-30)
     
-    # 4. Apply the "Whitening" Mask
-    # Force the detected background pixels to become pure white (255, 255, 255)
+    # Apply white mask to background
     enhanced[mask] = [255, 255, 255]
     
-    # 5. Sharpening
-    # Makes the colored text edges crisper
-    kernel = np.array([[0, -1, 0], 
-                       [-1, 5, -1], 
-                       [0, -1, 0]])
+    # Sharpen
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
     final_img = cv2.filter2D(enhanced, -1, kernel)
-    
     return final_img
 
 def deskew_image(image_cv):
     """
-    Detects skew angle and rotates the image (calculated on grayscale, applied to color).
+    Straightens the image.
     """
-    # Convert to grayscale just for angle detection
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
     angle = determine_skew(gray)
-    
-    # If angle is negligible, return original
     if angle is None or abs(angle) < 0.5:
         return image_cv
-
     (h, w) = image_cv.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    
-    # Rotate the COLOR image, filling background with white
     rotated = cv2.warpAffine(
         image_cv, M, (w, h), flags=cv2.INTER_CUBIC, 
         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
@@ -71,26 +73,47 @@ def deskew_image(image_cv):
 
 # --- User Interface (UI) ---
 
-st.title("🎨 Color PDF Cleaner")
-st.write("Upload -> Keep Red/Blue Notes + Remove Noise -> Download")
-st.caption("Best for exam papers, marked homework, or documents with stamps.")
+st.title("🧼 Magic PDF Eraser")
+st.write("Upload -> Remove Handwriting or Enhance Color -> Download")
 
 uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
-quality = st.slider("Output Quality (Recommended 80-90)", 50, 100, 85)
+
+# --- Sidebar Settings ---
+st.sidebar.header("Settings")
+
+# Mode Selection
+mode = st.sidebar.radio(
+    "Select Mode:",
+    ("🎨 Color Enhance (Keep Color)", "✏️ Handwriting Remover (Black & White)")
+)
+
+if mode == "✏️ Handwriting Remover (Black & White)":
+    st.sidebar.info("💡 **Tip:** Lower the threshold to remove more handwriting. Raise it if printed text is disappearing.")
+    
+    # Slider for Handwriting Removal
+    # Default is 100. 
+    # Move LEFT (e.g., 80) to remove more gray/light text.
+    # Move RIGHT (e.g., 120) to keep more text.
+    remove_threshold = st.sidebar.slider("Eraser Threshold", 50, 180, 100)
+    quality = 80 
+else:
+    remove_threshold = None
+    quality = st.sidebar.slider("Output Quality", 50, 100, 85)
+
 
 if uploaded_file is not None:
     st.info(f"File: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
     
-    if st.button("Start Color Processing"):
+    if st.button("Start Processing"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
             file_bytes = uploaded_file.read()
+            status_text.text("Reading PDF (200 DPI)...")
             
-            # Using 250 DPI for a good balance of speed and color detail
-            status_text.text("Reading PDF (250 DPI)...")
-            pil_images = convert_from_bytes(file_bytes, dpi=250)
+            # Using 200 DPI for speed
+            pil_images = convert_from_bytes(file_bytes, dpi=200)
             
             processed_images_bytes = []
             total_pages = len(pil_images)
@@ -100,21 +123,26 @@ if uploaded_file is not None:
                 progress_bar.progress(progress)
                 status_text.text(f"Processing Page {i+1}/{total_pages}...")
                 
-                # Convert PIL to OpenCV format (BGR)
+                # Convert to OpenCV
                 open_cv_image = np.array(pil_img) 
                 open_cv_image = open_cv_image[:, :, ::-1].copy() 
 
-                # 1. Straighten (Deskew)
+                # 1. Straighten
                 deskewed = deskew_image(open_cv_image)
 
-                # 2. Color Enhance & Clean
-                enhanced = enhance_image_color(deskewed)
+                # 2. Apply chosen Logic
+                if mode == "🎨 Color Enhance (Keep Color)":
+                    final_img = enhance_image_color(deskewed)
+                    # Convert BGR to RGB
+                    final_img = cv2.cvtColor(final_img, cv2.COLOR_BGR2RGB)
+                else:
+                    # Handwriting Removal Mode
+                    final_img = remove_handwriting_logic(deskewed, remove_threshold)
+                    # Convert Gray to RGB
+                    final_img = cv2.cvtColor(final_img, cv2.COLOR_GRAY2RGB)
 
                 # 3. Save
-                # Convert back to RGB for PIL
-                enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
-                img_pil_final = Image.fromarray(enhanced_rgb)
-                
+                img_pil_final = Image.fromarray(final_img)
                 img_byte_arr = io.BytesIO()
                 img_pil_final.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
                 processed_images_bytes.append(img_byte_arr.getvalue())
@@ -123,16 +151,16 @@ if uploaded_file is not None:
             final_pdf_bytes = img2pdf.convert(processed_images_bytes)
             
             progress_bar.progress(100)
-            status_text.success("Done! Colors preserved, background whitened.")
+            status_text.success("Done!")
             
             st.download_button(
-                label="📥 Download Cleaned PDF",
+                label="📥 Download Result",
                 data=final_pdf_bytes,
-                file_name=f"Color_Clean_{uploaded_file.name}",
+                file_name=f"Processed_{uploaded_file.name}",
                 mime="application/pdf"
             )
 
         except Exception as e:
-            st.error(f"Error occurred: {e}")
+            st.error(f"Error: {e}")
             if "poppler" in str(e).lower():
-                st.warning("System Hint: Poppler is missing on the server.")
+                st.warning("System Hint: Poppler is not installed on the server.")
