@@ -4,51 +4,57 @@ import numpy as np
 import img2pdf
 from pdf2image import convert_from_bytes
 from deskew import determine_skew
-from PIL import Image, ImageEnhance
+from PIL import Image
 import io
 
-# --- 页面配置 ---
-st.set_page_config(page_title="High-Res PDF Enhancer", layout="centered")
+# --- Page Configuration ---
+st.set_page_config(page_title="Color PDF Cleaner", layout="centered")
 
-# --- 核心处理函数 (高清版) ---
+# --- Core Processing Functions ---
 
-def enhance_image(image_cv):
+def enhance_image_color(image_cv):
     """
-    Method: High-Fidelity Enhancement.
-    Keeps the text smooth (anti-aliased) while whitening the background.
+    Retains color (e.g., red/blue pen) while removing light background noise.
     """
-    # 1. 转为灰度
-    gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+    # 1. Slight Gaussian Blur to smooth out paper noise
+    blurred = cv2.GaussianBlur(image_cv, (3, 3), 0)
     
-    # 2. 增强对比度 (让黑的更黑，白的更白，但保留中间的过渡)
-    # 这一步代替了暴力的“二值化”，所以字不会有锯齿
-    # CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(gray)
+    # 2. Color Cleaning (White Balancing / Thresholding)
+    # Convert to HSV to check the 'Value' (Brightness) channel
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
     
-    # 3. 简单的亮度调整，确保背景是纯白
-    # 任何亮于 200 的灰色都会变成纯白 255
-    _, result = cv2.threshold(enhanced, 200, 255, cv2.THRESH_TRUNC)
+    # Create a mask: pixels brighter than 200 are considered "background"
+    # This detects light gray paper, shadows, and faint bleed-through text
+    mask = v > 200 
     
-    # 4. 反转颜色恢复 (因为 TRUNC 会变暗，我们需要重新拉伸直方图)
-    result = cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX)
+    # 3. Boost Contrast and Saturation
+    # alpha > 1.0 (Increase contrast), beta < 0 (Darken the darks)
+    # This makes the ink look deeper and the background cleaner
+    enhanced = cv2.convertScaleAbs(blurred, alpha=1.4, beta=-30)
     
-    # 5. 最后一道保险：把浅灰色背景彻底变白，保留深色文字
-    # 这是一个平滑的阈值处理
-    result = cv2.convertScaleAbs(result, alpha=1.2, beta=10) # 增加对比度
+    # 4. Apply the "Whitening" Mask
+    # Force the detected background pixels to become pure white (255, 255, 255)
+    enhanced[mask] = [255, 255, 255]
     
-    # 稍微做一点点模糊来平滑噪点，但非常轻微
-    result = cv2.GaussianBlur(result, (3, 3), 0)
+    # 5. Sharpening
+    # Makes the colored text edges crisper
+    kernel = np.array([[0, -1, 0], 
+                       [-1, 5, -1], 
+                       [0, -1, 0]])
+    final_img = cv2.filter2D(enhanced, -1, kernel)
     
-    return result
+    return final_img
 
 def deskew_image(image_cv):
     """
-    Detect skew and rotate.
+    Detects skew angle and rotates the image (calculated on grayscale, applied to color).
     """
+    # Convert to grayscale just for angle detection
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
     angle = determine_skew(gray)
     
+    # If angle is negligible, return original
     if angle is None or abs(angle) < 0.5:
         return image_cv
 
@@ -56,39 +62,35 @@ def deskew_image(image_cv):
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     
-    # 旋转时使用白色填充背景
+    # Rotate the COLOR image, filling background with white
     rotated = cv2.warpAffine(
         image_cv, M, (w, h), flags=cv2.INTER_CUBIC, 
         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
     )
     return rotated
 
-# --- 界面 ---
+# --- User Interface (UI) ---
 
-st.title("🔍 HD PDF Scanner (高清版)")
-st.write("Upload -> High Quality Process (300 DPI) -> Download")
-st.caption("Note: Processing is slower because the quality is much higher.")
+st.title("🎨 Color PDF Cleaner")
+st.write("Upload -> Keep Red/Blue Notes + Remove Noise -> Download")
+st.caption("Best for exam papers, marked homework, or documents with stamps.")
 
-uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
-
-# 默认质量设为 85，保证清晰度
-quality = st.slider("Output Quality (Keep it high for clear text)", 50, 100, 85)
+uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
+quality = st.slider("Output Quality (Recommended 80-90)", 50, 100, 85)
 
 if uploaded_file is not None:
     st.info(f"File: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
     
-    if st.button("Start HD Processing"):
+    if st.button("Start Color Processing"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
             file_bytes = uploaded_file.read()
             
-            status_text.text("Scanning at 300 DPI (High Res)... Please wait...")
-            
-            # --- 关键修改：DPI 改为 300 ---
-            # 这会使处理时间变长，但清晰度大大增加
-            pil_images = convert_from_bytes(file_bytes, dpi=300)
+            # Using 250 DPI for a good balance of speed and color detail
+            status_text.text("Reading PDF (250 DPI)...")
+            pil_images = convert_from_bytes(file_bytes, dpi=250)
             
             processed_images_bytes = []
             total_pages = len(pil_images)
@@ -98,37 +100,39 @@ if uploaded_file is not None:
                 progress_bar.progress(progress)
                 status_text.text(f"Processing Page {i+1}/{total_pages}...")
                 
+                # Convert PIL to OpenCV format (BGR)
                 open_cv_image = np.array(pil_img) 
                 open_cv_image = open_cv_image[:, :, ::-1].copy() 
 
-                # 1. Straighten
+                # 1. Straighten (Deskew)
                 deskewed = deskew_image(open_cv_image)
 
-                # 2. HD Enhance
-                enhanced = enhance_image(deskewed)
+                # 2. Color Enhance & Clean
+                enhanced = enhance_image_color(deskewed)
 
                 # 3. Save
-                img_pil_final = Image.fromarray(enhanced)
-                img_byte_arr = io.BytesIO()
+                # Convert back to RGB for PIL
+                enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+                img_pil_final = Image.fromarray(enhanced_rgb)
                 
-                # --- 关键修改：使用高质量保存 ---
+                img_byte_arr = io.BytesIO()
                 img_pil_final.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
                 processed_images_bytes.append(img_byte_arr.getvalue())
 
-            status_text.text("Creating PDF...")
+            status_text.text("Packing final PDF...")
             final_pdf_bytes = img2pdf.convert(processed_images_bytes)
             
             progress_bar.progress(100)
-            status_text.success("Done! Crystal clear.")
+            status_text.success("Done! Colors preserved, background whitened.")
             
             st.download_button(
-                label="📥 Download HD PDF",
+                label="📥 Download Cleaned PDF",
                 data=final_pdf_bytes,
-                file_name=f"HD_{uploaded_file.name}",
+                file_name=f"Color_Clean_{uploaded_file.name}",
                 mime="application/pdf"
             )
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error occurred: {e}")
             if "poppler" in str(e).lower():
-                st.warning("System Error: Poppler missing.")
+                st.warning("System Hint: Poppler is missing on the server.")
