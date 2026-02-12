@@ -14,21 +14,23 @@ st.set_page_config(page_title="PDF Enhancer Tool", layout="centered")
 
 def enhance_image(image_cv):
     """
-    New Method: Strong Denoising + Otsu Binarization.
-    This creates a clean 'scanned document' look (Pure Black & White).
+    Method 3: Aggressive Noise Removal + Adaptive Thresholding.
+    This mimics the 'Magic Text' filter found in scanner apps.
     """
-    # 1. Convert to grayscale
+    # 1. Convert to Grayscale
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
     
-    # 2. Gaussian Blur (Important!)
-    # This step smooths out the "pepper" noise/dots from the paper background.
-    # (5, 5) is the kernel size. If still noisy, you can try (7, 7).
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # 2. Median Blur (Crucial Step)
+    # This specific blur is excellent at removing "salt and pepper" noise (the black dots)
+    # while keeping text edges sharp.
+    denoised = cv2.medianBlur(gray, 5)
     
-    # 3. Otsu's Binarization
-    # This algorithm automatically calculates the best threshold to separate text from background.
-    # It results in sharp black text on a purely white background.
-    ret, enhanced = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # 3. Adaptive Thresholding
+    # Block Size (31): Looks at a larger area to understand the background.
+    # C (15): High value means we aggressively turn light-gray pixels into white.
+    enhanced = cv2.adaptiveThreshold(
+        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 15
+    )
     
     return enhanced
 
@@ -39,7 +41,6 @@ def deskew_image(image_cv):
     grayscale = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
     angle = determine_skew(grayscale)
     
-    # If the angle is very small, we don't need to rotate it
     if angle is None or abs(angle) < 0.5:
         return image_cv
 
@@ -47,7 +48,6 @@ def deskew_image(image_cv):
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     
-    # Rotate and fill the background with white
     rotated = cv2.warpAffine(
         image_cv, M, (w, h), flags=cv2.INTER_CUBIC, 
         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
@@ -56,17 +56,16 @@ def deskew_image(image_cv):
 
 # --- User Interface (UI) ---
 
-st.title("📄 PDF Scanner & Enhancer")
-st.write("Upload PDF -> Auto Straighten, Clean & Compress -> Download")
+st.title("📄 PDF Super Cleaner")
+st.write("Upload PDF -> Remove Noise & Whiten Background -> Download")
 
 # 1. File Uploader
 uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
 # 2. Quality Slider
-quality = st.slider("Compression Quality (Lower = Smaller File Size)", 10, 95, 50)
+quality = st.slider("Compression Quality (50 is recommended)", 10, 95, 50)
 
 if uploaded_file is not None:
-    # Show file info
     st.info(f"Filename: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
     
     if st.button("Start Processing"):
@@ -74,55 +73,48 @@ if uploaded_file is not None:
         status_text = st.empty()
         
         try:
-            # Read file from memory
             file_bytes = uploaded_file.read()
             
-            status_text.text("Converting PDF pages to images...")
-            # dpi=150 is good enough for mobile viewing and faster processing
+            status_text.text("Reading PDF...")
             pil_images = convert_from_bytes(file_bytes, dpi=150)
             
             processed_images_bytes = []
             total_pages = len(pil_images)
             
             for i, pil_img in enumerate(pil_images):
-                # Update progress
                 progress = int((i / total_pages) * 90)
                 progress_bar.progress(progress)
-                status_text.text(f"Processing Page {i+1} of {total_pages}...")
+                status_text.text(f"Cleaning Page {i+1} of {total_pages}...")
                 
-                # Convert PIL to OpenCV format
                 open_cv_image = np.array(pil_img) 
                 open_cv_image = open_cv_image[:, :, ::-1].copy() 
 
-                # Step A: Straighten (Deskew)
+                # Step A: Straighten
                 deskewed = deskew_image(open_cv_image)
 
-                # Step B: Enhance (Clean Black & White)
+                # Step B: Clean & Enhance (New Logic)
                 enhanced = enhance_image(deskewed)
 
                 # Step C: Compress
                 img_pil_final = Image.fromarray(enhanced)
                 img_byte_arr = io.BytesIO()
-                # Optimize=True and Quality controls the file size
                 img_pil_final.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
                 processed_images_bytes.append(img_byte_arr.getvalue())
 
-            # Final Step: Combine into PDF
-            status_text.text("Generating final PDF file...")
+            status_text.text("Packing final PDF...")
             final_pdf_bytes = img2pdf.convert(processed_images_bytes)
             
             progress_bar.progress(100)
-            status_text.success("Done! Your file is ready.")
+            status_text.success("Success! Background is clean.")
             
-            # Download Button
             st.download_button(
-                label="📥 Download Enhanced PDF",
+                label="📥 Download Clean PDF",
                 data=final_pdf_bytes,
-                file_name=f"enhanced_{uploaded_file.name}",
+                file_name=f"clean_{uploaded_file.name}",
                 mime="application/pdf"
             )
 
         except Exception as e:
-            st.error(f"Error occurred: {e}")
+            st.error(f"Error: {e}")
             if "poppler" in str(e).lower():
                 st.warning("System Error: Poppler is not installed on the server.")
