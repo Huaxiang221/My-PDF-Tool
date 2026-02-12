@@ -14,13 +14,22 @@ st.set_page_config(page_title="PDF Enhancer Tool", layout="centered")
 
 def enhance_image(image_cv):
     """
-    Converts image to grayscale and applies adaptive thresholding 
-    to make the background white and text black.
+    New Method: Strong Denoising + Otsu Binarization.
+    This creates a clean 'scanned document' look (Pure Black & White).
     """
+    # 1. Convert to grayscale
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
-    enhanced = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
+    
+    # 2. Gaussian Blur (Important!)
+    # This step smooths out the "pepper" noise/dots from the paper background.
+    # (5, 5) is the kernel size. If still noisy, you can try (7, 7).
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # 3. Otsu's Binarization
+    # This algorithm automatically calculates the best threshold to separate text from background.
+    # It results in sharp black text on a purely white background.
+    ret, enhanced = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
     return enhanced
 
 def deskew_image(image_cv):
@@ -48,7 +57,7 @@ def deskew_image(image_cv):
 # --- User Interface (UI) ---
 
 st.title("📄 PDF Scanner & Enhancer")
-st.write("Upload PDF -> Auto Straighten, Enhance & Compress -> Download")
+st.write("Upload PDF -> Auto Straighten, Clean & Compress -> Download")
 
 # 1. File Uploader
 uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
@@ -88,7 +97,7 @@ if uploaded_file is not None:
                 # Step A: Straighten (Deskew)
                 deskewed = deskew_image(open_cv_image)
 
-                # Step B: Enhance (Binarize)
+                # Step B: Enhance (Clean Black & White)
                 enhanced = enhance_image(deskewed)
 
                 # Step C: Compress
