@@ -8,7 +8,7 @@ from PIL import Image
 import io
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Color PDF Cleaner", layout="centered")
+st.set_page_config(page_title="Compressed PDF ", layout="centered")
 
 # --- Core Processing Functions ---
 
@@ -71,17 +71,18 @@ def deskew_image(image_cv):
 
 # --- User Interface (UI) ---
 
-st.title("🎨 Color PDF Cleaner")
-st.write("Upload -> Keep Red/Blue Notes + Remove Noise -> Download")
-st.caption("Best for exam papers, marked homework, or documents with stamps.")
+st.title("Compressed PDF by Seng")
+st.write("Browse Files -> Upload PDF -> Start Processing -> Download")
+st.caption("Output Quality 50 -> Compressed")
+st.caption("Output Quality 100 -> Enlarged")
 
 uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
-quality = st.slider("Output Quality (Recommended 80-90)", 50, 100, 85)
+quality = st.slider("Output Quality", 50, 100, 50)
 
 if uploaded_file is not None:
     st.info(f"File: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
     
-    if st.button("Start Color Processing"):
+    if st.button("Start Processing"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -123,10 +124,10 @@ if uploaded_file is not None:
             final_pdf_bytes = img2pdf.convert(processed_images_bytes)
             
             progress_bar.progress(100)
-            status_text.success("Done! Colors preserved, background whitened.")
+            status_text.success("Done!")
             
             st.download_button(
-                label="📥 Download Cleaned PDF",
+                label="Download PDF",
                 data=final_pdf_bytes,
                 file_name=f"Color_Clean_{uploaded_file.name}",
                 mime="application/pdf"
@@ -136,3 +137,4 @@ if uploaded_file is not None:
             st.error(f"Error occurred: {e}")
             if "poppler" in str(e).lower():
                 st.warning("System Hint: Poppler is missing on the server.")
+
