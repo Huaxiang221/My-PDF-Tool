@@ -6,111 +6,115 @@ from deskew import determine_skew
 from PIL import Image
 import cv2
 import io
+import os
+import tempfile
+import gc  # Garbage collection (Memory cleanup)
 
-st.set_page_config(page_title="Simple PDF Compressor", layout="centered")
+# --- Page Config ---
+st.set_page_config(page_title="Stable PDF Compressor", layout="centered")
 
-# --- Helper Function: Only Rotate, Don't Change Color ---
+# --- Helper Function: Straighten Image ---
 def deskew_image(pil_image):
     """
-    Detects skew angle and rotates the image.
-    Does NOT change colors.
+    Detects skew angle and rotates the image to straighten it.
     """
-    # Convert PIL to OpenCV (RGB)
     open_cv_image = np.array(pil_image)
-    
-    # Create a grayscale copy just to calculate the angle
     gray = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2GRAY)
     angle = determine_skew(gray)
     
-    # If angle is very small, return original image
     if angle is None or abs(angle) < 0.5:
         return pil_image
 
-    # Calculate rotation
     (h, w) = open_cv_image.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     
-    # Rotate the original RGB image
-    # borderValue=(255, 255, 255) means fill corners with White
     rotated = cv2.warpAffine(
         open_cv_image, M, (w, h), flags=cv2.INTER_CUBIC, 
         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
     )
-    
-    # Convert back to PIL
     return Image.fromarray(rotated)
 
-# --- UI ---
+# --- User Interface ---
 
-st.title("📂 Simple PDF Compressor")
-st.write("Compress PDF file size while keeping ORIGINAL colors.")
+st.title("🛡️ Anti-Crash PDF Compressor")
+st.write("Safe Mode: Processes pages one by one to prevent server crashes.")
+st.caption("Perfect for large files or high-resolution scans.")
 
-uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
 
-# Settings
 st.write("---")
 st.subheader("Settings")
-# 1. Straighten Option
 auto_straighten = st.checkbox("Auto-Straighten (Fix Crooked Pages)", value=True)
-# 2. Compression Slider
-quality = st.slider("Compression Level (Lower = Smaller File)", 10, 95, 50)
-st.caption("Note: 50 is a good balance. 20 is very small but blurry.")
+quality = st.slider("Compression Quality (Lower = Smaller File)", 10, 95, 50)
 
 if uploaded_file is not None:
-    st.info(f"Original File: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
+    st.info(f"File Name: {uploaded_file.name} | Size: {uploaded_file.size / 1024:.2f} KB")
     
-    if st.button("Start Compression"):
+    if st.button("Start Safe Processing"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
-            file_bytes = uploaded_file.read()
-            status_text.text("Reading PDF...")
-            
-            # Convert PDF to Images (200 DPI is standard for reading)
-            pil_images = convert_from_bytes(file_bytes, dpi=200)
-            
-            processed_images_bytes = []
-            total_pages = len(pil_images)
-            
-            for i, pil_img in enumerate(pil_images):
-                progress = int((i / total_pages) * 90)
-                progress_bar.progress(progress)
-                status_text.text(f"Processing Page {i+1}/{total_pages}...")
+            # Create a temporary directory to store processed images
+            # This prevents running out of RAM (Memory)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                file_bytes = uploaded_file.read()
+                status_text.text("Reading PDF...")
                 
-                # 1. Straighten (Optional)
-                if auto_straighten:
-                    final_img = deskew_image(pil_img)
-                else:
-                    final_img = pil_img
+                # Convert PDF to images (200 DPI is a good balance)
+                pil_images = convert_from_bytes(file_bytes, dpi=200)
+                
+                total_pages = len(pil_images)
+                saved_image_paths = []
 
-                # 2. Compress & Save
-                # We save directly as JPEG using PIL. 
-                # This keeps all colors exactly as they are, just compresses the data.
-                img_byte_arr = io.BytesIO()
-                
-                # Convert to RGB (in case of PNG/Transparent inputs) to save as JPEG
-                if final_img.mode in ("RGBA", "P"):
-                    final_img = final_img.convert("RGB")
+                for i, pil_img in enumerate(pil_images):
+                    # Update Progress
+                    progress = int((i / total_pages) * 90)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing Page {i+1}/{total_pages}...")
                     
-                final_img.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
-                processed_images_bytes.append(img_byte_arr.getvalue())
+                    # 1. Straighten (Optional)
+                    if auto_straighten:
+                        final_img = deskew_image(pil_img)
+                    else:
+                        final_img = pil_img
 
-            status_text.text("Building PDF...")
-            final_pdf_bytes = img2pdf.convert(processed_images_bytes)
-            
-            progress_bar.progress(100)
-            status_text.success("Done! Colors preserved.")
-            
-            st.download_button(
-                label="📥 Download Compressed PDF",
-                data=final_pdf_bytes,
-                file_name=f"Compressed_{uploaded_file.name}",
-                mime="application/pdf"
-            )
+                    # 2. Save immediately to Disk (Temporary Folder)
+                    # We save the file path instead of keeping the image in memory
+                    temp_img_path = os.path.join(temp_dir, f"page_{i}.jpg")
+                    
+                    # Ensure RGB mode for JPEG saving
+                    if final_img.mode in ("RGBA", "P"):
+                        final_img = final_img.convert("RGB")
+                    
+                    final_img.save(temp_img_path, format='JPEG', quality=quality, optimize=True)
+                    saved_image_paths.append(temp_img_path)
+                    
+                    # --- CRITICAL STEP: Free up Memory ---
+                    del final_img  # Delete processed image variable
+                    del pil_img    # Delete original image variable
+                    gc.collect()   # Force Python to clean up memory immediately
+
+                # 3. Build PDF from Disk
+                status_text.text("Combining pages into PDF...")
+                
+                # img2pdf can read directly from file paths (Very memory efficient)
+                final_pdf_bytes = img2pdf.convert(saved_image_paths)
+                
+                progress_bar.progress(100)
+                status_text.success("Success! Processed without crashing.")
+                
+                st.download_button(
+                    label="📥 Download Compressed PDF",
+                    data=final_pdf_bytes,
+                    file_name=f"Compressed_{uploaded_file.name}",
+                    mime="application/pdf"
+                )
 
         except Exception as e:
             st.error(f"Error: {e}")
-            if "poppler" in str(e).lower():
-                st.warning("System Hint: Poppler is not installed on the server.")
+            if "Memory" in str(e):
+                st.warning("⚠️ The file is still too large. Try splitting the PDF into smaller parts.")
+            elif "poppler" in str(e).lower():
+                st.warning("System Error: Poppler is not installed on the server.")
