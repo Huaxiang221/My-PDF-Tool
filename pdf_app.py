@@ -37,9 +37,9 @@ def deskew_image(pil_image):
 
 # --- User Interface ---
 
-st.title("🛡️ Anti-Crash PDF Compressor")
-st.write("Safe Mode: Processes pages one by one to prevent server crashes.")
-st.caption("Perfect for large files or high-resolution scans.")
+st.title("🛡️ Simple PDF Compressor")
+st.write("Compress your PDF with controllable quality.")
+st.caption("Higher quality larger file size.")
 
 uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
 
@@ -103,7 +103,7 @@ if uploaded_file is not None:
                 final_pdf_bytes = img2pdf.convert(saved_image_paths)
                 
                 progress_bar.progress(100)
-                status_text.success("Success! Processed without crashing.")
+                status_text.success("Success!")
                 
                 st.download_button(
                     label="📥 Download Compressed PDF",
@@ -118,3 +118,4 @@ if uploaded_file is not None:
                 st.warning("⚠️ The file is still too large. Try splitting the PDF into smaller parts.")
             elif "poppler" in str(e).lower():
                 st.warning("System Error: Poppler is not installed on the server.")
+
