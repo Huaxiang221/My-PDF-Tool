@@ -49,7 +49,8 @@ def deskew_image(pil_image):
 # --- UI ---
 
 st.title("Simple PDF Compressor")
-st.write("Higher quality, larger size.")
+st.write("Higher compression quality = Clearer image, larger file size.")
+st.write("Higher pixel = Sharper text (Zoomable), but slower processing.")
 st.caption("This tool is made by Seng.")
 
 uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
@@ -153,3 +154,4 @@ if uploaded_file is not None:
             st.error(f"Error: {e}")
             if "poppler" in str(e).lower():
                 st.warning("System Error: Poppler missing.")
+
